@@ -142,7 +142,7 @@ type
     function getVersion(var name: string): integer;
     function getArchitecture(hProcess: THandle): integer;
     function getABI: integer;
-    function enumSymbolsFromFile(modulepath: string; modulebase: ptruint; callback: TNetworkEnumSymCallback): boolean;
+    function enumSymbolsFromFile(modulepath: string; fileoffset: dword; modulebase: ptruint; callback: TNetworkEnumSymCallback; nameaddendum: string=''): boolean;
     function loadModule(hProcess: THandle; modulepath: string): boolean;
     function loadModuleEx(hProcess: THandle; dlopenaddress: ptruint; modulepath: string): boolean;
     function loadExtension(hProcess: Thandle): boolean;
@@ -271,6 +271,7 @@ const
 type
   TLocalModuleListEntry=class
     baseaddress: ptruint;
+    fileoffset: dword;
     size: dword;
     part: integer;
     name: string;
@@ -388,6 +389,7 @@ var ModulelistCommand: packed record
     modulebase: qword;
     modulepart: dword;
     modulesize: dword;
+    modulefileoffset: dword;
     stringlength: dword;
   end;
 
@@ -429,11 +431,25 @@ begin
     lpme.modBaseAddr:=pointer(mle.baseaddress);
     lpme.modBaseSize:=mle.size;
     lpme.GlblcntUsage:=mle.part;
-    copymemory(@lpme.szExePath[0], @mle.name[1], min(length(mle.name)+1, MAX_PATH));
+    lpme.ProccntUsage:=mle.fileoffset;
+
+    mnames:=mle.name;
+
+    if mle.part>0 then
+    asm
+    nop
+    end;
+
+    copymemory(@lpme.szExePath[0], @mnames[1], min(length(mnames)+1, MAX_PATH));
     lpme.szExePath[MAX_PATH-1]:=#0;
 
-    copymemory(@lpme.szModule[0], @mle.name[1], min(length(mle.name)+1, MAX_MODULE_NAME32));
+    if mle.part<>0 then
+      mnames:=mnames+'.'+inttostr(mle.part);
+
+    copymemory(@lpme.szModule[0], @mnames[1], min(length(mnames)+1, MAX_MODULE_NAME32));
     lpme.szModule[MAX_MODULE_NAME32-1]:=#0;
+
+
 
     inc(lpme.th32ModuleID);
     exit(true);
@@ -466,21 +482,26 @@ begin
           if mname<>nil then
             FreeMemAndNil(mname);
 
-          if r.modulepart<>0 then
-            mnames:=mnames+'.'+inttostr(r.modulepart);
-
-
-
           ZeroMemory(@lpme, sizeof(lpme));
           lpme.hModule:=r.modulebase;
           lpme.modBaseAddr:=pointer(r.modulebase);
           lpme.modBaseSize:=r.modulesize;
           lpme.GlblcntUsage:=r.modulepart;
+          lpme.ProccntUsage:=r.modulefileoffset;
           {$ifdef darwin}
           lpme.is64bit:=processhandler.is64Bit;
           {$endif}
+
+          if r.modulepart>0 then
+          asm
+          nop
+          end;
+
           copymemory(@lpme.szExePath[0], @mnames[1], min(length(mnames)+1, MAX_PATH));
           lpme.szExePath[MAX_PATH-1]:=#0;
+
+          if r.modulepart<>0 then
+            mnames:=mnames+'.'+inttostr(mle.part);
 
           copymemory(@lpme.szModule[0], @mnames[1], min(length(mnames)+1, MAX_MODULE_NAME32));
           lpme.szModule[MAX_MODULE_NAME32-1]:=#0;
@@ -622,6 +643,7 @@ var CTSCommand: packed record
         modulebase: qword;
         modulepart: dword;
         modulesize: dword;
+        modulefileoffset: dword;
         stringlength: dword;
     end;
 
@@ -761,10 +783,8 @@ begin
             mle.baseaddress:=r2.modulebase;
             mle.part:=r2.modulepart;
             mle.size:=r2.modulesize;
+            mle.fileoffset:=r2.modulefileoffset;
             mle.name:=mname;
-            if r2.modulepart<>0 then
-              mle.name:=mle.name+'.'+inttostr(r2.modulepart);
-
             ths.list.add(mle);
           end;
         end;
@@ -1913,8 +1933,9 @@ begin
   begin
     if receive(@CeVersion, sizeof(CeVersion))>0 then
     begin
-      getmem(_name, CeVersion.stringsize);
+      getmem(_name, CeVersion.stringsize+1);
       receive(_name, CeVersion.stringsize);
+      _name[CeVersion.stringsize]:=#0;
 
       name:=_name;
       FreeMemAndNil(_name);
@@ -2000,10 +2021,11 @@ begin
 
 end;
 
-function TCEConnection.enumSymbolsFromFile(modulepath: string; modulebase: ptruint; callback: TNetworkEnumSymCallback): boolean;
+function TCEConnection.enumSymbolsFromFile(modulepath: string; fileoffset: dword; modulebase: ptruint; callback: TNetworkEnumSymCallback; nameaddendum: string=''): boolean;
 type
   TCeGetSymbolList=packed record
     command: byte;
+    fileoffset: uint32;
     symbolpathsize: uint32;
     path: array [0..0] of char;
   end;
@@ -2057,13 +2079,18 @@ begin
 
 
 
-  msgsize:=5+length(modulepath);
+  msgsize:=1+4+4+length(modulepath);
   getmem(msg, msgsize);
 
   msg^.command:=CMD_GETSYMBOLLISTFROMFILE;
+  msg^.fileoffset:=fileoffset;
   msg^.symbolpathsize:=length(modulepath);
   CopyMemory(@msg^.path, @modulepath[1], length(modulepath));
 
+  if fileoffset<>0 then
+  asm
+  nop
+  end;
 
   if send(msg,  msgsize)>0 then
   begin
@@ -2133,8 +2160,8 @@ begin
                   end
                   else
                   begin
-                    if (callback(shortenedmodulename, symname, modulebase+currentsymbol^.address, currentsymbol^.size, false) and
-                        callback(modulename, symname, modulebase+currentsymbol^.address, currentsymbol^.size, true))=false then
+                    if (callback(shortenedmodulename+nameaddendum, symname, modulebase+currentsymbol^.address, currentsymbol^.size, false) and
+                        callback(modulename+nameaddendum, symname, modulebase+currentsymbol^.address, currentsymbol^.size, true))=false then
                       break;
                   end;
                 end;
@@ -2177,7 +2204,7 @@ begin
   begin
     getmem(input, sizeof(TInput)+length(modulepath));
 
-    input^.command:=CMD_LOADMODULE;
+    input^.command:=CMD_LOADMODULEEX;
     input^.handle:=hProcess and $ffffff;
     input^.dlopenaddress:=dlopenaddress;
     input^.modulepathlength:=Length(modulepath);
@@ -2208,19 +2235,22 @@ var
   input: Pinput;
   r:uint64;
 begin
+  OutputDebugString('TCEConnection.loadModule('+modulepath+')');
   result:=false;
-  if isNetworkHandle(hProcess) then
+   if isNetworkHandle(hProcess) then
   begin
-    getmem(input, sizeof(TInput)+length(modulepath));
+    getmem(input, sizeof(TInput)+length(modulepath)+1);
 
     input^.command:=CMD_LOADMODULE;
     input^.handle:=hProcess and $ffffff;
-    input^.modulepathlength:=Length(modulepath);
-    CopyMemory(@input^.modulename, @modulepath[1], length(modulepath));
+    input^.modulepathlength:=Length(modulepath)+1;
+    CopyMemory(@input^.modulename, @modulepath[1], length(modulepath)+1); //also include 0 terminator
 
-    if send(input,  sizeof(TInput)+length(modulepath))>0 then
+    if send(input,  sizeof(TInput)+length(modulepath)+1)>0 then
     begin
       receive(@r, sizeof(r));
+
+      OutputDebugString('CMD_LOADMODULE returned '+r.ToString);
       result:=r<>0;
     end;
 
@@ -2639,7 +2669,6 @@ var i: integer;
   B: BOOL=TRUE;
 begin
   result:=0;
-  fpsetsockopt(socket, IPPROTO_TCP, TCP_NODELAY, @B, sizeof(B));
 
 
   while (result<size) do
@@ -2748,7 +2777,11 @@ begin
   while not (fConnected) and (retry<5) do
   begin
     if fpconnect(socket, @SockAddr, sizeof(SockAddr)) >=0 then
-      fConnected:=true
+    begin
+      b:=TRUE;
+      fpsetsockopt(socket, IPPROTO_TCP, TCP_NODELAY, @B, sizeof(B)); //just to be sure
+      fConnected:=true;
+    end
     else
     begin
       inc(retry);

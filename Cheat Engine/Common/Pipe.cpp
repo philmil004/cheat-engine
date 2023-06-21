@@ -3,7 +3,11 @@
 #ifdef _WINDOWS
 #include <Windows.h>
 #else
-#include "macport.h"
+  #ifdef _APPLE_
+    #include "macport.h"
+  #else
+    #include "linuxport.h"
+  #endif
 
 #define ReadFile ReadFilePipeWrapper
 #define WriteFile WriteFilePipeWrapper
@@ -49,16 +53,32 @@ void Pipe::Read(PVOID buf, unsigned int count)
 {
 	DWORD br;
 	if (count==0) return;
-	if (ReadFile(pipehandle, buf, count, &br, NULL)==FALSE)
-		throw("Read Error");
+	DWORD totalread = 0;
+
+	while (totalread < count)
+	{
+		if (ReadFile(pipehandle, buf, count, &br, NULL) == FALSE)
+			throw("Read Error");
+
+		totalread += br;
+		buf = &((char *)buf)[br];
+	}
 }
 
 void Pipe::Write(PVOID buf, unsigned int count)
 {
 	DWORD bw;
 	if (count==0) return;
-	if (WriteFile(pipehandle, buf, count, &bw, NULL)==FALSE)
-		throw("Write Error");
+	DWORD totalwritten = 0;
+
+	while (totalwritten < count)
+	{
+		if (WriteFile(pipehandle, buf, count, &bw, NULL) == FALSE)
+			throw("Write Error");
+
+		totalwritten += bw;
+		buf = &((char *)buf)[bw];
+	}
 }
 
 BYTE Pipe::ReadByte()

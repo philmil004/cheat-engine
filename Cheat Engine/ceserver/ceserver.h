@@ -83,8 +83,6 @@
 #define CMD_CREATEDIR               54
 #define CMD_DELETEFILE              55
 
-
-
 #define CMD_AOBSCAN					200
 
 //just in case I ever get over 255 commands this value will be reserved for a secondary command list (FF 00 -  FF 01 - ... - FF FE - FF FF 01 - FF FF 02 - .....
@@ -117,6 +115,7 @@ typedef struct {
     int64_t modulebase;
     int32_t modulepart;
     int32_t modulesize;
+    uint32_t modulefileoffset;
     int32_t modulenamesize;
 } CeModuleEntry, *PCeModuleEntry;
 

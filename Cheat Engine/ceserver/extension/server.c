@@ -68,11 +68,15 @@ int debug_log(const char * format , ...)
   va_list list;
   va_start(list,format);
   int ret = vprintf(format,list);
+  va_end(list);
+
 
   #ifdef __ANDROID__
-    LOGD(format,list);
-  #endif
+  va_start(list,format);
+  LOGD(format,list);
   va_end(list);
+  #endif
+
   return ret;
 }
 
@@ -163,7 +167,7 @@ ssize_t recvall (int s, void *buf, size_t size, int flags)
       }
       else
       {
-        debug_log("Error during recvall: %d. errno=%d\n",(int)i, errno);
+        debug_log("Error during recvall: %d. errno=%d (%s)\n",(int)i, errno, strerror(errno));
         return i; //read error, or disconnected
       }
 
@@ -353,13 +357,20 @@ int DispatchCommand(int currentsocket, unsigned char command)
     {
       uint32_t modulepathlength;
       debug_log("EXTCMD_LOADMODULE\n");
+      debug_log("receiving modulepath:\n");
 
       if (recvall(currentsocket, &modulepathlength, sizeof(modulepathlength), 0)>0)
       {
-        char *modulepath[modulepathlength+1];
+        debug_log("pathlength is %d bytes long\n", modulepathlength);
+
+        char *modulepath[modulepathlength+4];
         if (recvall(currentsocket, modulepath, modulepathlength, 0)>0)
         {
           modulepath[modulepathlength]=0;
+          modulepath[modulepathlength+1]=0;
+          modulepath[modulepathlength+2]=0;
+          modulepath[modulepathlength+3]=0;
+
           debug_log("EXTCMD_LOADMODULE: modulepath=%s\n",modulepath);
           uint64_t result;
           result=(uint64_t)(dlopen((const char *)modulepath, RTLD_NOW));
@@ -369,8 +380,6 @@ int DispatchCommand(int currentsocket, unsigned char command)
           if (result==0)
           {
             debug_log("EXTCMD_LOADMODULE: %s\n",dlerror());
-
-
           }
 
           sendall(currentsocket, &result, sizeof(result), 0);
@@ -465,7 +474,7 @@ void *ServerThread(void *arg)
   while (!done)
   {
     struct sockaddr_un addr_client;
-    socklen_t clisize;
+    socklen_t clisize=sizeof(addr_client);
     int a;
     debug_log("extension:calling accept\n");
     a=accept(s, (struct sockaddr *)&addr_client, &clisize);

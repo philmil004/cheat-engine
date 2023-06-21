@@ -913,6 +913,7 @@ var i,j,k, m: integer;
       name: string;
       entries: array of TAOBEntry;
       minaddress, maxaddress: ptruint;
+      protection: string;
       memscan: TMemScan;
     end;
 
@@ -1004,6 +1005,72 @@ begin
   begin
     //AOBSCAN(variable,aobtring)  (works like define)
     currentline:=code[i];
+
+    if uppercase(copy(currentline,1,10))='AOBSCANEX(' then
+    begin
+      //convert this line from AOBSCANEX(varname,bytestring) to DEFINE(varname,address)
+      a:=pos('(',currentline);
+      b:=pos(',',currentline);
+      c:=pos(')',currentline);
+
+      if (a>0) and (b>0) and (c>0) then
+      begin
+        s1:=trim(copy(currentline,a+1,b-a-1));
+        s2:=trim(copy(currentline,b+1,c-b-1));
+
+
+        //s1=varname
+        //s2=AOBstring
+        testPtr:=0;
+        if (not syntaxcheckonly) then
+        begin
+
+          //find the ' ' module (single space)
+          m:=-1;
+          for j:=0 to length(aobscanmodules)-1 do
+            if aobscanmodules[j].name=' ' then
+            begin
+              m:=j;
+              break;
+            end;
+
+          if m=-1 then
+          begin
+            setlength(aobscanmodules, length(aobscanmodules)+1);
+            m:=length(aobscanmodules)-1;
+
+            aobscanmodules[m].name:=' ';
+            aobscanmodules[m].minaddress:=0;
+            aobscanmodules[m].protection:='*C*W+X'; //don't care about copy on write or writable, but executable must be set
+
+            {$ifdef cpu64}
+            if processhandler.is64Bit then
+              aobscanmodules[m].maxaddress:=qword($7fffffffffffffff)
+            else
+            {$endif}
+            begin
+              if Is64bitOS then
+                aobscanmodules[m].maxaddress:=$ffffffff
+              else
+                aobscanmodules[m].maxaddress:=$7fffffff;
+            end;
+
+            aobscanmodules[m].maxaddress:=qword($ffffffffffffffff);
+            setlength(aobscanmodules[m].entries,0); //shouldn't be needed, but do it anyhow
+          end;
+
+          j:=length(aobscanmodules[m].entries);
+          setlength(aobscanmodules[m].entries, j+1);
+          aobscanmodules[m].entries[j].name:=s1;
+          aobscanmodules[m].entries[j].aobstring:=s2;
+          aobscanmodules[m].entries[j].linenumber:=i;
+        end
+        else
+          code[i]:='DEFINE('+s1+', 00000000)';
+
+
+      end else raise exception.Create(rsWrongSyntaxAOBSCANName11223355);
+    end;
 
     if uppercase(copy(currentline,1,8))='AOBSCAN(' then
     begin
@@ -1226,9 +1293,9 @@ begin
       aobstrings:=aobstrings+'('+aobscanmodules[i].entries[j].aobstring+')';
 
     if length(aobscanmodules[i].entries)=1 then //bytearrays is slightly slower, so only use it if more than one entry is to be scanned
-      aobscanmodules[i].memscan.firstscan(soExactValue, vtByteArray, rtRounded, aobscanmodules[i].entries[0].aobstring, '', aobscanmodules[i].minaddress, aobscanmodules[i].maxaddress, true, false, false, false, fsmNotAligned)
+      aobscanmodules[i].memscan.firstscan(soExactValue, vtByteArray, rtRounded, aobscanmodules[i].entries[0].aobstring, aobscanmodules[i].protection, aobscanmodules[i].minaddress, aobscanmodules[i].maxaddress, true, false, false, false, fsmNotAligned)
     else
-      aobscanmodules[i].memscan.firstscan(soExactValue, vtByteArrays, rtRounded, aobstrings, '', aobscanmodules[i].minaddress, aobscanmodules[i].maxaddress, true, false, false, false, fsmNotAligned);
+      aobscanmodules[i].memscan.firstscan(soExactValue, vtByteArrays, rtRounded, aobstrings, aobscanmodules[i].protection, aobscanmodules[i].minaddress, aobscanmodules[i].maxaddress, true, false, false, false, fsmNotAligned);
   end;
 
   //now wait till all are finished
@@ -1586,6 +1653,7 @@ var i: integer=0;
       found: boolean;
       j,k: integer;
       temps: string;
+      oldname: string;
     begin
       if name='' then
       begin
@@ -1598,6 +1666,7 @@ var i: integer=0;
 
       if debug_getAddressFromScript then OutputDebugString('getAddressFromScript');
 
+      oldname:=name;
       name:=uppercase(name);
 
       if debug_getAddressFromScript then OutputDebugString('looking for '+name);
@@ -1633,7 +1702,20 @@ var i: integer=0;
           end;
         end;
 
-      if debug_getAddressFromScript then OutputDebugString('symbols...');
+      if debug_getAddressFromScript then OutputDebugString('symbols original case...');
+      try
+        if targetself then
+          result:=selfsymhandler.getAddressFromName(oldname)
+        else
+          result:=symhandler.getAddressFromName(oldname);
+
+        if result<>0 then exit;
+
+        if debug_getAddressFromScript then OutputDebugString('result=0 and no exception....');
+      except
+      end;
+
+      if debug_getAddressFromScript then OutputDebugString('symbols uppercase...');
       try
         if targetself then
           result:=selfsymhandler.getAddressFromName(name)
@@ -2425,6 +2507,10 @@ begin
                 raise exception.Create(format(rsXCouldNotBeFound, [s1]));
               end;
 
+              if testptr=0 then
+                raise exception.Create(format(rsXCouldNotBeFound, [s1]));
+
+
 
               multilineinjection:=TStringList.create;
               GetOriginalInstruction(testptr, multilineinjection, processhandler.is64Bit,true); //don't take on the symbol.  (module and section are ok, not symbols)
@@ -3026,7 +3112,6 @@ begin
       for i:=0 to length(createthread)-1 do
       begin
         ok1:=true;
-
         try
           testptr:=symhandler.getAddressFromName(createthread[i]);
         except
@@ -3914,6 +3999,7 @@ begin
             if labels[j].labelname=dataForAACodePass2.cdata.symbols[k].name then
             begin
               labels[j].address:=dataForAACodePass2.cdata.symbols[k].address;
+              labels[j].defined:=true;
               ok1:=labels[j].address<>0;
               break;
             end;
@@ -4217,52 +4303,8 @@ begin
       begin
         for i:=0 to length(createthread)-1 do
         begin
-          ok1:=true;
-          try
-            testptr:=symhandler.getAddressFromName(createthread[i]);
-          except
-            ok1:=false;
-          end;
-
-          if not ok1 then
-            for j:=0 to length(labels)-1 do
-              if uppercase(labels[j].labelname)=uppercase(createthread[i]) then
-              begin
-                ok1:=true;
-                testptr:=labels[j].address;
-                break;
-              end;
-
-          if not ok1 then
-            for j:=0 to length(allocs)-1 do
-              if uppercase(allocs[j].varname)=uppercase(createthread[i]) then
-              begin
-                ok1:=true;
-                testptr:=allocs[j].address;
-                break;
-              end;
-
-          if not ok1 then
-            for j:=0 to length(kallocs)-1 do
-              if uppercase(kallocs[j].varname)=uppercase(createthread[i]) then
-              begin
-                ok1:=true;
-                testptr:=kallocs[j].address;
-                break;
-              end;
-
-          if not ok1 then
-            for j:=0 to length(defines)-1 do
-              if uppercase(defines[j].name)=uppercase(createthread[i]) then
-              begin
-                try
-                  testptr:=symhandler.getAddressFromName(defines[j].whatever);
-                  ok1:=true;
-                except
-                end;
-
-                break;
-              end;
+          testptr:=getAddressFromScript(createthread[i]);
+          ok1:=testptr<>0;
 
           if ok1 then //address found
           begin
@@ -4376,7 +4418,8 @@ begin
       freeandnil(tokens);
 
     {$IFNDEF jni}
-    pluginhandler.handleAutoAssemblerPlugin(@currentlinep, 3,aaid); //tell the plugins to free their data
+    if pluginhandler<>nil then
+      pluginhandler.handleAutoAssemblerPlugin(@currentlinep, 3,aaid); //tell the plugins to free their data
 
     if targetself then
     begin

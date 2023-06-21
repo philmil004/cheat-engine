@@ -2556,7 +2556,10 @@ procedure TSymbolloaderthread.execute;
 type
   TModInfo=record
     baseaddress: qword;
+    fileoffset: dword;
     size: qword;
+    path: pchar;
+    part: integer;
   end;
   PModInfo=^TModInfo;
 var sp: pchar;
@@ -2583,6 +2586,7 @@ var sp: pchar;
 begin
   NameThreadForDebugging('SymbolLoaderThread', GetCurrentThreadId);
   debugpart:=0;
+  if targetself then skippdb:=true;
 
 
   try
@@ -2712,7 +2716,7 @@ begin
 
         if thisprocesshandle<>0 then
         begin
-          symbolloaderthreadcs.Enter;  //needed so selfsymbolhandlerdoesnb't cause issues
+          symbolloaderthreadcs.Enter;  //needed so selfsymbolhandler doesn't cause issues
           try
             //get the export symbols first
 
@@ -2792,103 +2796,107 @@ begin
 
             if terminated then exit;
 
-            d:=symgetoptions;
-            d:=d or SYMOPT_CASE_INSENSITIVE or SYMOPT_INCLUDE_32BIT_MODULES;
-            d:=d or SYMOPT_DEFERRED_LOADS;
-            symsetoptions(d);
-
-            SymbolsLoaded:=false; //SymInitialize(thisprocesshandle, sp, true);
-            if symbolsloaded=false then
+            if skippdb=false then
             begin
-              SymbolsLoaded:=SymInitialize(thisprocesshandle, sp, false);
-              needstoenumodules:=true;
-            end
-            else
-              needstoenumodules:=false;
-
-            if terminated then exit;
-
-            if symbolsloaded then
-            begin
-              symbolscleaned:=false;
-
-             // NameThreadForDebugging('Symbolhandler');
+              d:=symgetoptions;
+              d:=d or SYMOPT_CASE_INSENSITIVE or SYMOPT_INCLUDE_32BIT_MODULES;
+              d:=d or SYMOPT_DEFERRED_LOADS;
+              symsetoptions(d);
 
 
-              debugpart:=2;
-              //symsetoptions(symgetoptions or SYMOPT_CASE_INSENSITIVE);
-
-              if kernelsymbols then LoadDriverSymbols(true);
-              LoadDLLSymbols(true, needstoenumodules);
-              //debugpart:=20001;
-
-              processThreadEvents;
-
-              if skippdb=false then
+              SymbolsLoaded:=false; //SymInitialize(thisprocesshandle, sp, true);
+              if symbolsloaded=false then
               begin
-                //enumerate the basic data from the symbols
-                //enumeratedModules:=0;
-                pdbonly:=true;
+                SymbolsLoaded:=SymInitialize(thisprocesshandle, sp, false);
+                needstoenumodules:=true;
+              end
+              else
+                needstoenumodules:=false;
 
-                if assigned(SymEnumerateModules64) then
-                  SymEnumerateModules64(thisprocesshandle, @EM, self );
+              if terminated then exit;
 
-                pdbsymbolsloaded:=true;
+              if symbolsloaded then
+              begin
+                symbolscleaned:=false;
+
+               // NameThreadForDebugging('Symbolhandler');
 
 
-                if terminated then exit;
+                debugpart:=2;
+                //symsetoptions(symgetoptions or SYMOPT_CASE_INSENSITIVE);
 
+                if kernelsymbols then LoadDriverSymbols(true);
+                LoadDLLSymbols(true, needstoenumodules);
+                //debugpart:=20001;
 
                 processThreadEvents;
 
-                debugpart:=3;
+                if (skippdb=false) and (not targetself) then
+                begin
+                  //enumerate the basic data from the symbols
+                  //enumeratedModules:=0;
+                  pdbonly:=true;
 
-                isloading:=false;
+                  if assigned(SymEnumerateModules64) then
+                    SymEnumerateModules64(thisprocesshandle, @EM, self );
 
-                while symbolloaderthreadeventqueue.Count>0 do
+                  pdbsymbolsloaded:=true;
+
+
+                  if terminated then exit;
+
+
                   processThreadEvents;
 
+                  debugpart:=3;
 
-                OutputDebugString('loadingExtendedDebugSymbols'+#13#10);
-                loadingExtendedDebugSymbols:=true;
-                if not terminated then
-                  EnumerateExtendedDebugSymbols;
-                loadingExtendedDebugSymbols:=false;
+                  isloading:=false;
+
+                  while symbolloaderthreadeventqueue.Count>0 do
+                    processThreadEvents;
 
 
-                OutputDebugString('after loadingExtendedDebugSymbols'+#13#10);
+                  OutputDebugString('loadingExtendedDebugSymbols'+#13#10);
+                  loadingExtendedDebugSymbols:=true;
+                  if not terminated then
+                    EnumerateExtendedDebugSymbols;
+                  loadingExtendedDebugSymbols:=false;
 
-                if not terminated then
-                begin
-                  parsingstructures:=true;
-                  OutputDebugString('parsingstructures'+#13#10);
-                  EnumerateStructures;
-                  parsingstructures:=false;
-                end;
 
-                if (targetself=false) and (length(modulelist.withdebuginfo)>0) then
-                begin
-                  while not terminated do
+                  OutputDebugString('after loadingExtendedDebugSymbols'+#13#10);
+
+                  if not terminated then
                   begin
-                    symbolloaderthreadeventevent.waitfor(100);
+                    parsingstructures:=true;
+                    OutputDebugString('parsingstructures'+#13#10);
+                    EnumerateStructures;
+                    parsingstructures:=false;
+                  end;
 
-                    while symbolloaderthreadeventqueue.Count>0 do
-                      processThreadEvents;
-
-                    if ReadProcessMemory(processhandle, amodulebase, @b,1,ar)=false then       //release the debug symbols when the process terminates
+                  if (targetself=false) and (length(modulelist.withdebuginfo)>0) then
+                  begin
+                    while not terminated do
                     begin
-                      break;
+                      symbolloaderthreadeventevent.waitfor(100);
+
+                      while symbolloaderthreadeventqueue.Count>0 do
+                        processThreadEvents;
+
+                      if ReadProcessMemory(processhandle, amodulebase, @b,1,ar)=false then       //release the debug symbols when the process terminates
+                      begin
+                        break;
+                      end;
                     end;
                   end;
-                end;
-              end; //skippdb=false
-              debugpart:=7;
-              Symcleanup(thisprocesshandle);
-              symbolscleaned:=true;
-              debugpart:=8;
-            end
-            else
-              error:=true;
+                end; //skippdb=false
+                debugpart:=7;
+                Symcleanup(thisprocesshandle);
+                symbolscleaned:=true;
+                debugpart:=8;
+              end
+              else
+                error:=true;
+            end;
           finally
             symbolloaderthreadcs.Leave;
           end;
@@ -2934,7 +2942,10 @@ begin
           begin
             getmem(modinfo, sizeof(TModInfo));
             modinfo^.baseaddress:=self.owner.modulelist[i].baseaddress;
+            modinfo^.fileoffset:=self.owner.modulelist[i].elffileoffset;
             modinfo^.size:=self.owner.modulelist[i].basesize;
+            modinfo^.path:=strnew(pchar(self.owner.modulelist[i].modulepath));
+            modinfo^.part:=self.owner.modulelist[i].elfpart;
             mpl.AddObject(self.owner.modulelist[i].modulepath, tobject(modinfo));
           end;
         finally
@@ -2948,12 +2959,23 @@ begin
         begin
           modinfo:=pmodinfo(mpl.Objects[i]);
 
-          if self.owner.modulelist[i].elfpart=0 then
-            c.enumSymbolsFromFile(self.owner.modulelist[i].modulepath, modinfo^.baseaddress, NetworkES);
+          //if self.owner.modulelist[i].elfpart=0 then
+          if string(modinfo^.path).EndsWith('.apk') then
+          asm
+          nop
+          end;
+
+          if modinfo^.part=0 then
+            s:=''
+          else
+            s:='.'+inttostr(modinfo.part);
+
+          c.enumSymbolsFromFile(modinfo^.path, modinfo^.fileoffset, modinfo^.baseaddress, NetworkES,s);
 
           inc(enumeratedModules);
           fprogress:=ceil((i/modulecount)*100);
 
+          strdispose(modinfo^.path);
           freememandnil(modinfo);
 
         end;
@@ -4376,7 +4398,7 @@ begin
 
 
     symbollistsMREW.Beginread;
-    for i:=0 to length(symbollists)-1 do
+    for i:=length(symbollists)-1 downto 0 do
     begin
       si:=symbollists[i].FindFirstSymbolFromBase(mi.baseaddress);
       while (si<>nil) and inrangeq(si.address, mi.baseaddress, mi.baseaddress+mi.basesize) do
@@ -4448,7 +4470,7 @@ begin
 
 
   symbollistsMREW.BeginRead;
-  for i:=0 to length(symbollists)-1 do
+  for i:=length(symbollists)-1 downto 0 do
   begin
     setlength(list2,0);
     symbollists[i].GetModuleList(list2);
@@ -4546,7 +4568,7 @@ begin
 
 
       symbollistsMREW.beginread;
-      for i:=0 to length(symbollists)-1 do
+      for i:=length(symbollists)-1 downto 0 do
       begin
         result:=symbollists[i].getModuleByAddress(address, mi);
         if result then break;
@@ -4589,7 +4611,7 @@ begin
   if not result then
   begin
     symbollistsMREW.beginread;
-    for i:=0 to length(symbollists)-1 do
+    for i:=length(symbollists)-1 downto 0 do
     begin
       result:=symbollists[i].getModuleByName(moduleNameToFind,mi);
       if result then break;
@@ -4701,7 +4723,7 @@ begin
           begin
             //check the symbollists registered by the user
             symbollistsMREW.Beginread;
-            for i:=0 to length(symbollists)-1 do
+            for i:=length(symbollists)-1 downto 0 do
             begin
               si:=symbollists[i].FindAddress(address);
               if si<>nil then break;
@@ -5217,7 +5239,7 @@ begin
                 if si=nil then
                 begin
                   symbollistsMREW.Beginread;
-                  for j:=0 to length(symbollists)-1 do
+                  for j:=length(symbollists)-1 downto 0 do
                   begin
                     if (symbollists[j].PID=0) or (processid=symbollists[j].PID) then
                     begin
@@ -5747,8 +5769,12 @@ begin
           try
             if module32first(ths,me32) then
             repeat
-              s:=WinCPToUTF8(pchar(@me32.szExePath[0]));
-              x:=s;
+              if me32.GlblcntUsage>0 then
+              asm
+              nop
+              end;
+              s:=WinCPToUTF8(pchar(@me32.szModule[0]));
+              x:=WinCPToUTF8(pchar(@me32.szExePath[0]));
               if (s[1]<>'[') then //do not extract the filename if it's a 'special' marker
                 modulename:=extractfilename(s)
               else
@@ -5845,6 +5871,7 @@ begin
                     newmodulelist[newmodulelistpos].isSystemModule:=true;
 
                   newmodulelist[newmodulelistpos].elfpart:=me32.GlblcntUsage;
+                  newmodulelist[newmodulelistpos].elffileoffset:=me32.ProccntUsage;
                 end;
 
                 if (not newmodulelist[newmodulelistpos].isSystemModule) and (commonModuleList<>nil) then //check if it's a common module (e.g nvidia physx dll's)

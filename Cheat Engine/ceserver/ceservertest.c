@@ -571,7 +571,14 @@ void *CESERVERTEST(int pid )
   uint64_t a;
 
   pthread_t pth;
+
+  char *output;
   debug_log("CESERVERTEST: running (v2)\n");
+
+  GetModuleSize("/home/eric/x/bla2.so",0, 123);
+
+  if (1)
+    return NULL;
 
   //sleep(2);
   debug_log("connecting...\n");

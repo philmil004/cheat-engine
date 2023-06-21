@@ -105,14 +105,14 @@ extendedToByteTable(number): {}      - Converts an extended to a bytetable
 stringToByteTable(string): {}        - Converts a string to a bytetable
 wideStringToByteTable(string): {}    - Converts a string to a widestring and converts that to a bytetable
 
-byteTableToWord(table, OPTIONAL signed:boolean): number       - Converts a bytetable to a word
-byteTableToDword(table, OPTIONAL signed:boolean): number      - Converts a bytetable to a dword
-byteTableToQword(table): number      - Converts a bytetable to a qword
-byteTableToFloat(table): number      - Converts a bytetable to a float
-byteTableToDouble(table): number     - Converts a bytetable to a double
-byteTableToExtended(table): number   - Converts a bytetable to an extended and converts that to a double
-byteTableToString(table): string     - Converts a bytetable to a string
-byteTableToWideString(table): string - Converts a bytetable to a widestring and converts that to a string
+byteTableToWord(table, OPTIONAL signed:boolean, OPTIONAL tableindex=1): number       - Converts a bytetable to a word
+byteTableToDword(table, OPTIONAL signed:boolean, OPTIONAL tableindex=1): number      - Converts a bytetable to a dword
+byteTableToQword(table, OPTIONAL tableindex=1): number      - Converts a bytetable to a qword
+byteTableToFloat(table, OPTIONAL tableindex=1): number      - Converts a bytetable to a float
+byteTableToDouble(table, OPTIONAL tableindex=1): number     - Converts a bytetable to a double
+byteTableToExtended(table, OPTIONAL tableindex=1): number   - Converts a bytetable to an extended and converts that to a double
+byteTableToString(table, OPTIONAL tableindex=1): string     - Converts a bytetable to a string
+byteTableToWideString(table, OPTIONAL tableindex=1): string - Converts a bytetable to a widestring and converts that to a string
 
 bOr(int1, int2)   : Binary Or
 bXor(int1, int2)  : Binary Xor
@@ -145,8 +145,9 @@ loadPOFile(path): Loads a .PO file used for translation
 translate(string): Returns a translation of the string. Returns the same string if it can't be found
 translateID(translationid: string, originalstring: string OPTIONAL): Returns a translation of the string id
 
-ansiToUtf8(string): Converts a string in Ansi encoding to UTF8
-utf8ToAnsi(string): Converts a string in UTF8 encoding to Ansi
+convertToUTF8(string/bytetable, originalcodepagenumber): Conversts a given string/bytearray into a utf8 converted from the gtiven codepage number
+ansiToUTF8(string): Converts a string in Ansi encoding to UTF8
+UTF8ToAnsi(string): Converts a string in UTF8 encoding to Ansi
 Note: GUI components mainly show in UTF8, some other functions use Ansi, try to find out which ones...
 
 
@@ -191,7 +192,6 @@ waitForDotNet(): Waits till all .NET symbols are loaded (this includes DLL Expor
 waitForPDB(): Waits till all PDB symbols are loaded (this includes DLL Exports, and .NET)
 searchPDBWhileLoading(state: boolean): Will interrupt symbol enum to query the debughelp symbol handler about a specific symbol. This can take a while. Default is false
 
-releaseDebugFiles() : Stops the symbolloader from processing any debug files and releases what it had open
 
 errorOnLookupFailure(state): If set to true (default) address lookups in stringform will raise an error if it can not be looked up. This includes symbolnames that are not defined and pointers that are bad. If set to false it will return 0 in those cases
   (Useful for pointers that don't work 100% of the time)
@@ -377,6 +377,8 @@ function onOpenProcess(processid):
 MainForm.OnProcessOpened: function(processid, processhandle, caption) - Define this if you want to be notified when a new process has been opened. Called only once from the main thread. It is recommended to use this instead of onOpenProcess
 
 function onTableLoad(before): If defined this function will be called twice when a table gets loaded. Once before the loading, and once after.
+
+function onLuaError(errorstring): if defined this function will be called when a lua error happens. The string returned will be the error shown
 
 
 getOpenedProcessID() : Returns the currently opened process. If none is open, returns 0
@@ -1438,6 +1440,7 @@ properties
   Items: Strings - Strings derived object containings all the items in the list
   ItemIndex: integer - Get selected index. -1 is nothing selected
   Canvas: Canvas - The canvas object used to render on the object
+  DroppedDown: boolean - True if currently dropped down (can be set as well)
 
 methods
   clear()
@@ -2030,6 +2033,8 @@ methods
   writeDword(integer)
   readQword(): integer
   writeQword(integer)
+  readString(stringlengthinbytes) : Reads a given stringcount
+  writeString(string, include0terminator: boolean OPTIONAL=false)
   readAnsiString(): string
   writeAnsiString(string)
 
@@ -2045,7 +2050,7 @@ methods
   saveToFile(filename) : Writes the contents of the memory stream to the specified file
   loadFromFileNoError(filename):boolean,string - Replaces the contents in the memory stream with the contents of a file on disk. On success returns true, else false with a secondary return the error message
   saveToFileNoError(filename):boolean,string - Writes the contents of the memory stream to the specified file. On success returns true, else false with a secondary return the error message
-
+  clear(): sets the size to 0
 
 
 FileStream Class (Inheritance: HandleStream->Stream->Object)
@@ -2068,6 +2073,7 @@ createTableFile(filename, filepath OPTIONAL): TableFile - Add a new file to your
 properties
   Name: string
   Stream: MemoryStream
+  DoNotSave: boolean
 
 methods
   delete() : Deletes this file from your table.
@@ -2138,6 +2144,7 @@ properties
       mrhDecreaseValue(7):  Decreases the current value with the value property (see value)
   value: string - Value used depending on what kind of hotkey is used
   ID: integer - Unique id of this hotkey (ReadOnly)
+  Active: boolean - True if it's hotkey will be handled, false if this hotkey is ignored
   Description: string - The description of this hotkey  
   HotkeyString: string - The hotkey formatted as a string (ReadOnly)
   ActivateSound: string - Tablefile name of a WAV file inside the table which will get played on activate events
@@ -3154,14 +3161,20 @@ properties
 methods
   lock() : Acquire a lick on this pipe till unlock is called. If lock can not be acquired, wait. Recursive calls are allowed
   unlock()
+  readIntoStream(stream,size)
+  writeFromStream(stream,size OPTIONAL) : Writes the contents of the stream for size bytes into the pipe. If size is omitted, it sends all from the current pointer
+
   writeBytes(ByteTable, size OPTIONAL): Writes the provided byte table to the pipe. if size is not provided, the whole table is sent. Returns the number of bytes sent, or nil on failure
   readBytes(size: integer): returns a byte table from the pipe, or nil on failure
 
   readDouble(): Read a double from the pipe, nil on failure
   readFloat(): Read a float from the pipe, nil on failure
   readQword(): Read an 8 byte value from the pipe, nil on failure
+  readQwords(count): Reads 'count' times 8 byte values from the pipe and returns it as a table
   readDword(): Read a 4 byte value from the pipe, nil on failure
+  readDwords(count): Reads 'count' times 4 byte values from the pipe and returns it as a table
   readWord(): Read a 2 byte value from the pipe, nil on failure
+  readWords(count): Reads 'count' times 2 byte values from the pipe and returns it as a table
   readByte(): Read a byte from the pipe, nil on failure
 
   readString(size: integer): Reads a string from the pipe, nil on failure.  (Can support 0-byte chars)
@@ -3949,6 +3962,8 @@ methods
 
 VirtualTreeColunmns class:
 properties
+  []: VirtualTreeColunmn
+
 methods
   add(text OPTIONAL) : Created ands returns a new VirtualTreeColumn object
 
@@ -3956,6 +3971,7 @@ Header class:
 properties
   AutoSizeIndex: integer - When Options contains hoAutoResize this determines which column will be resized on resize of the control
   AutoResize: boolean - shortcut to access the hoAutoResize flag in Options
+  MainColumn: integer - Column index to draw the treepart in.  (e.g: column0 is not visible)
   Columns: VirtualTreeColunmns  
   Options: set(string) - Options is a comma seperated string which can be one of the following:
               hoAutoResize            - Adjust a column so that the header never exceeds the client width of the owner control.
@@ -4089,6 +4105,8 @@ properties
   HasChildren[node]: boolean - gets/sets the state that the node has children
   Selected[node]: boolean - gets/sets the selected state of the node
   Expanded[node]: boolean - gets/sets if the node is expanded (calls onExpanding when set to true)
+  NodeChildCount[node]: integer - Gets the number of childnodes
+  NodeIndex[node]: integer - Gets the index of the node in relation to it's parent
 
 methods
   saveToFile(filepath)
@@ -4104,7 +4122,6 @@ methods
 
   getRootNode(): node - returns the rootnode
 
-  absoluteIndex(node): integer - returns the absolute index of the given node
   nodeSelected(node): boolean - returns true if the node is selected
   nodeChecked(node): boolean - returns true if the node is checked
   enumSelectedNodes(): table - returns an indexed table of selected nodes
@@ -4123,13 +4140,30 @@ methods
   getNodeParent(node): node - returns a parent node, or nil
   getFirstChild(node): node - returns the first child of a node
   getNextSibling(node): node - gets the next sibling
-
+  getNodeLevel(node): integer - gets the level at which this node resided (it does this by calling getNodeParent until it hits nil)
 
 ----CEServer----
 connectToCEServer(hostname,port) - Connects to the given host and port. On success, most commands subsequent will be handled by the server. Like processlist, memory reading, etc...
 isConnectedToCEServer(): boolean - returns true if currently connected to a ceserver
 getCEServerPath(): string - returns the path where ceserver is located on the target
+getCEServerInterface(): returns a ceserverInterface object 
 
+CEServerInterface class:
+properties
+  connected: boolean
+  path: string
+  Option[optionname]: string
+methods
+  getOptionList(): table - returns an indexed table with all available options. Each table entry contains: optname, parentoptname, optdescription, acceptablevalues, currentvalue, optiontype(0=not an option, just a label, 1=bool, 2=int, 3=float, 4=double, 5=text)
+  getCurrentPath(): Returns the current working path
+  setCurrentPath(): Changes the current working path 
+  enumFiles(path OPTIONAL): Returns an indexed list describing the contents of the given path.  It constists of tables containing 'name' and 'type'.  Type can be : DT_UNKNOWN, DT_FIFO, DT_CHR, DT_DIR, DT_BLK, DT_REG, DT_LNK, DT_SOCK, DT_WHT
+
+  createDir(path): Create the provided path
+  getFilePermission(path) : returns the filemode bitmask of the given file (parse the bitmask yourself)
+  setFilePermission(path, permissions) : sets the filemode bitmask of the given file
+  getFile(path, stream) : creates a file at the given path with the contents of the stream object
+  putFile(path, stream) : reads a file from the given path and stores it in the provided stream object
 
 
 ce lua extensions:

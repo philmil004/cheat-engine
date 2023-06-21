@@ -243,6 +243,7 @@ begin
 end;
 
 threadvar insideErrorHandler: boolean;
+
 function lua_defaulterrorhandler(L: Plua_State):integer; cdecl;
 var
   e: string;
@@ -250,9 +251,10 @@ var
 begin
   result:=0;
   insideErrorHandler:=true;
+
   try
     lua_getglobal(L,'onLuaError');
-    if not lua_isfunction(L,-1) then
+    if lua_isfunction(L,-1) then
     begin
       lua_pushvalue(L,1);
       lua_pcall(L,1,1,0);
@@ -288,14 +290,10 @@ begin
 
     lua_pop(L,1);
     lua_pushstring(L,traceresult);
-
-
-
     result:=1;
-  except
-    result:=0;
+  finally
+    insideErrorHandler:=false;
   end;
-  insideErrorHandler:=false;
 end;
 
 function lua_pcall(L: Plua_State; nargs, nresults, errf: Integer): Integer; cdecl;
@@ -330,15 +328,22 @@ begin
     result:=lua.lua_pcall(L, nargs, nresults, errf);
 
     if addedexceptionhandler then
+    begin
       lua_remove(L,errf);
+      errf:=0;
+    end;
+
   except
     on e: exception do
     begin
       lua_pop(L, lua_gettop(L));
       result:=LUA_ERRRUN;
+      if addedexceptionhandler then
+        errf:=0;
+
       lua_pushstring(l, e.Message);
 
-      if (GetCurrentThreadId=MainThreadID) and (e.Message='Access violation') and mainform.miEnableLCLDebug.checked then
+      if (GetCurrentThreadId=MainThreadID) and mainform.miEnableLCLDebug.checked then
       begin
         DebugLn('Lua Exception: '+e.Message);
         lazlogger.DumpExceptionBackTrace;
@@ -350,8 +355,6 @@ begin
   begin
     if GetCurrentThreadId=MainThreadID then
     begin
-
-
       //lua_Debug
       error:=Lua_ToString(l, -1);
       if (error<>'') then
@@ -366,7 +369,7 @@ begin
           usesluaengineform:=true;
         end;
 
-        printoutput.add(rsError+error);
+        printoutput.AddText(rsError+error);
 
         if (frmLuaEngine<>nil) and usesluaengineform and (frmLuaEngine.cbShowOnPrint.checked) then
           frmLuaEngine.show;
@@ -671,15 +674,77 @@ begin
     result:='nil';
 end;
 
+procedure LoadLuaScriptsFromPath(path: string; var mainformwasset: boolean; var addresslistwasset: boolean);
+var
+  DirInfo: TSearchRec;
+  i,r: integer;
+  pc: pchar;
+
+
+begin
+  ZeroMemory(@DirInfo,sizeof(TSearchRec));
+  r := FindFirst(path+'*.lua', FaAnyfile, DirInfo);
+
+  while (r = 0) do
+  begin
+    if (DirInfo.Attr and FaVolumeId <> FaVolumeID) then
+    begin
+      if ((DirInfo.Attr and FaDirectory) <> FaDirectory) then
+      begin
+        i:=lua_dofile(luavm, pchar( UTF8ToWinCP(autorunpath+DirInfo.name)));
+        if i<>0 then //error
+        begin
+          i:=lua_gettop(luavm);
+          if i>0 then
+          begin
+            pc:=lua_tolstring(luavm, -1,nil);
+            if pc<>nil then
+              showmessage(DirInfo.name+rsError2+pc)
+            else
+              showmessage(DirInfo.name+rsError3);
+          end
+          else showmessage(DirInfo.name+rsError3);
+        end;
+
+        //reset stack
+        lua_pop(LuaVM, lua_gettop(luavm));
+
+        if mainformwasset then
+        begin
+          lua_getglobal(LuaVM,'MainForm');
+          if lua_isnil(LuaVM,-1) then
+          begin
+            MessageDlg(format(rsScriptCorruptedVar, [autorunpath+DirInfo.name, 'MainForm']), mtError,[mbOK],0);
+            mainformwasset:=false;
+          end;
+          lua_pop(LuaVM,1);
+        end;
+
+        if addresslistwasset then
+        begin
+          lua_getglobal(LuaVM,'AddressList');
+          if lua_isnil(LuaVM,-1) then
+          begin
+            MessageDlg(format(rsScriptCorruptedVar, [autorunpath+DirInfo.name, 'AddressList']), mtError,[mbOK],0);
+            addresslistwasset:=false;
+          end;
+          lua_pop(LuaVM,1);
+        end;
+
+      end;
+    end;
+    r := FindNext(DirInfo);
+  end;
+  FindClose(DirInfo);
+end;
+
 procedure InitializeLuaScripts(noautorun: boolean=false);
 var f: string;
   i,r: integer;
+
   pc: pchar;
-  DirInfo: TSearchRec;
   mainformwasset: boolean=true;
-  addresslistwasset: boolean=true;
-
-
+  addresslistwasset: boolean=false;
 begin
   lua_getglobal(LuaVM,'MainForm');
   if lua_isnil(LuaVM,-1) then
@@ -743,68 +808,11 @@ begin
   end;
 
   //autorun folder
-
   if noautorun=false then
   begin
-
-
-    ZeroMemory(@DirInfo,sizeof(TSearchRec));
-    r := FindFirst(autorunpath+'*.lua', FaAnyfile, DirInfo);
-
-    while (r = 0) do
-    begin
-      if (DirInfo.Attr and FaVolumeId <> FaVolumeID) then
-      begin
-        if ((DirInfo.Attr and FaDirectory) <> FaDirectory) then
-        begin
-          i:=lua_dofile(luavm, pchar( UTF8ToWinCP(autorunpath+DirInfo.name)));
-          if i<>0 then //error
-          begin
-            i:=lua_gettop(luavm);
-            if i>0 then
-            begin
-              pc:=lua_tolstring(luavm, -1,nil);
-              if pc<>nil then
-                showmessage(DirInfo.name+rsError2+pc)
-              else
-                showmessage(DirInfo.name+rsError3);
-            end
-            else showmessage(DirInfo.name+rsError3);
-          end;
-
-          //reset stack
-          lua_pop(LuaVM, lua_gettop(luavm));
-
-          if mainformwasset then
-          begin
-            lua_getglobal(LuaVM,'MainForm');
-            if lua_isnil(LuaVM,-1) then
-            begin
-              MessageDlg(format(rsScriptCorruptedVar, [autorunpath+DirInfo.name, 'MainForm']), mtError,[mbOK],0);
-              mainformwasset:=false;
-            end;
-            lua_pop(LuaVM,1);
-          end;
-
-          if addresslistwasset then
-          begin
-            lua_getglobal(LuaVM,'AddressList');
-            if lua_isnil(LuaVM,-1) then
-            begin
-              MessageDlg(format(rsScriptCorruptedVar, [autorunpath+DirInfo.name, 'AddressList']), mtError,[mbOK],0);
-              addresslistwasset:=false;
-            end;
-            lua_pop(LuaVM,1);
-          end;
-
-        end;
-      end;
-      r := FindNext(DirInfo);
-    end;
-    FindClose(DirInfo);
+    loadLuaScriptsFromPath(autorunpath, mainformwasset, addresslistwasset);
+    LoadLuaScriptsFromPath(autorunpath+'custom'+PathDelim, mainformwasset, addresslistwasset);
   end;
-
-
 
   if translationfilepath<>'' then
   begin
@@ -5041,7 +5049,7 @@ begin
   if lua_gettop(L)>=1 then
     luaclass_newClass(L, TOpenDialog.create(lua_toceuserdata(L, 1)))
   else
-    luaclass_newClass(L, TOpenDialog.create(nil));
+    luaclass_newClass(L, TOpenDialog.create(nil), true);
 
   result:=1;
 end;
@@ -11034,6 +11042,12 @@ begin
   result:=0;
 end;
 
+function getPointerSize(L:PLua_state): integer; cdecl;
+begin
+  lua_pushinteger(L, processhandler.pointersize);
+  result:=1;
+end;
+
 
 function getDebugContext(L:PLua_state): integer; cdecl;
 var extraregs: boolean;
@@ -16341,8 +16355,6 @@ begin
 {$endif}
 
 
-
-
 end;
 
 procedure InitializeLua;
@@ -16858,6 +16870,7 @@ begin
 
     lua_register(L, 'registerBinUtil', lua_registerBinUtil);
     lua_register(L, 'setPointerSize', setPointerSize);
+    lua_register(L, 'getPointerSize', getPointerSize);
 
 
     lua_register(L, 'executeCode', executeCode);
@@ -17019,6 +17032,8 @@ begin
     lua_register(L, 'growMemoryRegion', lua_growMemoryRegion);
 
     lua_register(L, 'loadCEServerExtension', lua_loadCEServerExtension);
+
+
 
 
 
@@ -17237,9 +17252,9 @@ end;
 var
   tm: TThreadManager;
   oldReleaseThreadVars: procedure;
-
-
-
+  {$ifdef DEBUGTHREADERRORS}
+  oldEndThreadHandler: TEndThreadHandler;
+  {$endif}
 
 procedure ReleaseLuaThreadVars;
 var s: pstring;
@@ -17259,6 +17274,34 @@ begin
 end;
 
 
+{$ifdef DEBUGTHREADERRORS}
+
+procedure ThreadError(data: Exception);
+begin
+  MessageDlg('Error in thread '+GetThreadName+':'+data.Message, mtError,[mbok],0);
+end;
+
+Procedure EndThreadHandler(ExitCode : DWord);
+var m: tmethod;
+begin
+  if TThread.CurrentThread.FreeOnTerminate=false then
+  begin
+    if TThread.CurrentThread.FatalException<>nil then
+    begin
+      m.code:=@threadError;
+      m.data:=TThread.CurrentThread.FatalException;
+      tthread.Synchronize(nil, TThreadMethod(m));
+    end;
+  end;
+
+
+  if assigned(oldEndThreadHandler) then
+    oldEndThreadHandler(Exitcode);
+end;
+{$endif}
+
+
+
 initialization
   _LuaCS:=TCriticalSection.create;
   luarefcs:=TCriticalSection.create;
@@ -17268,6 +17311,11 @@ initialization
   GetThreadManager(tm);
   oldReleaseThreadVars:=tm.ReleaseThreadVars;
   tm.ReleaseThreadVars:=@ReleaseLuaThreadVars;
+
+  {$ifdef DEBUGTHREADERRORS}
+  oldEndThreadHandler:=tm.EndThread;
+  tm.EndThread:=@EndThreadHandler;
+  {$endif}
 
 
   SetThreadManager(tm);
